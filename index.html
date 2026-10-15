@@ -250,8 +250,8 @@
     <div id="chatHistory"></div>
     <div id="chatTabs">
       <div class="tab active" data-chat="local">Local</div>
-      <div class="tab" data-chat="party">Party</div>
-      <div class="tab" data-chat="personal">Personal</div>
+      <div class="tab" data-chat="global">Party</div>
+      <div class="tab" data-chat="system">Personal</div>
     </div>
     <div id="chatInputWrap">
       <input id="chatInput" maxlength="120" placeholder="Написать сообщение...">
@@ -2231,5 +2231,273 @@ console.log('%c🌍 Часть 8 — мир с другими игроками �
 </script>
 <!-- ЧАСТЬ 8 ЗАКОНЧЕНА -->
 
+<script>
+// ============================================================
+//  ЧАСТЬ 9: чат через WebSocket + финал
+// ============================================================
+
+// ---------- Состояние чата ----------
+const chatState = {
+  currentTab: 'local',     // local | global | system
+  history: []
+};
+
+// ============================================================
+//  Инициализация чата (UI)
+// ============================================================
+function initChat() {
+  // Приветствие
+  if (chatState.history.length === 0) {
+    addChatMessage('sys', '', 'Добро пожаловать в DragonTown!');
+    addChatMessage('sys', '', 'Нажми T — чтобы открыть чат, Enter — отправить.');
+  }
+
+  // Табы
+  document.querySelectorAll('#chatTabs .tab').forEach(t => {
+    t.addEventListener('click', () => {
+      Sound.click();
+      document.querySelectorAll('#chatTabs .tab').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      chatState.currentTab = t.dataset.chat;   // local | global | system
+      renderChatHistory();
+    });
+  });
+
+  // Отправка
+  $('chatSend').addEventListener('click', sendChatMessage);
+  $('chatInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      sendChatMessage();
+    }
+  });
+}
+
+// ============================================================
+//  Отправка сообщения (теперь через WebSocket!)
+// ============================================================
+function sendChatMessage() {
+  const input = $('chatInput');
+  const text = input.value.trim();
+  if (!text) return;
+
+  // Ограничение длины (как в Worker'е — 240 символов)
+  if (text.length > 240) return;
+
+  // Отправляем через сеть
+  if (typeof sendChatToServer === 'function') {
+    const ok = sendChatToServer(text, chatState.currentTab);
+    if (!ok) {
+      // Если сеть отвалилась — показываем локально
+      addChatMessage('sys', '', 'Нет соединения с сервером. Сообщение не отправлено.');
+    }
+  }
+
+  // Очищаем поле
+  input.value = '';
+  input.blur();
+}
+
+// ============================================================
+//  Добавление сообщения в историю (локальное)
+// ============================================================
+function addChatMessage(type, nick, text, tab = 'local') {
+  chatState.history.push({
+    type, nick, text, tab,
+    time: Date.now()
+  });
+
+  if (chatState.history.length > 100) {
+    chatState.history.shift();
+  }
+
+  renderChatHistory();
+}
+
+// ============================================================
+//  Приём сообщения из сети (вызывается из части 7)
+// ============================================================
+function addChatMessageFromNetwork(data) {
+  // data = { id, name, text, tab, time }
+  if (!data || !data.text) return;
+
+  // Не показываем свои сообщения дважды (они уже добавлены локально при отправке)
+  // Но сервер присылает свои тоже — поэтому проверяем:
+  const isMine = (data.id === NET.myId);
+
+  // Добавляем в историю
+  chatState.history.push({
+    type: 'user',
+    nick: data.name || 'Дракон',
+    text: data.text,
+    tab: data.tab || 'local',
+    time: data.time || Date.now(),
+    isMine
+  });
+
+  if (chatState.history.length > 100) {
+    chatState.history.shift();
+  }
+
+  renderChatHistory();
+
+  // Звук при получении чужого сообщения
+  if (!isMine) {
+    Sound.chatMsg();
+  }
+}
+
+// ============================================================
+//  Отрисовка истории чата (вызывается при переключении табов)
+// ============================================================
+function renderChatHistory() {
+  const box = $('chatHistory');
+  if (!box) return;
+  box.innerHTML = '';
+
+  const visible = chatState.history.filter(m => {
+    if (m.type === 'sys') return true;
+    if (m.type === 'user' && m.isMine === undefined) return true; // локальные
+    if (chatState.currentTab === 'local') {
+      return m.tab === 'local';
+    }
+    return m.tab === chatState.currentTab;
+  });
+
+  visible.slice(-12).forEach(m => {
+    const div = document.createElement('div');
+    div.className = 'msg' + (m.type === 'sys' ? ' sys' : '');
+
+    if (m.type === 'sys') {
+      div.textContent = m.text;
+    } else {
+      const tabPrefix = {
+        local: '',
+        global: '[G] ',
+        system: '[S] '
+      }[m.tab] || '';
+
+      const nickStyle = m.isMine
+        ? 'color:#ffd966'        // свой ник — жёлтый
+        : 'color:#8fd8ff';       // чужой — голубой
+
+      div.innerHTML = `<span class="nick" style="${nickStyle}">${tabPrefix}${escapeHtml(m.nick)}:</span> ${escapeHtml(m.text)}`;
+    }
+
+    box.appendChild(div);
+  });
+
+  box.scrollTop = box.scrollHeight;
+}
+
+// ============================================================
+//  Загрузка истории с сервера (при подключении)
+// ============================================================
+function renderChatFromNetwork(history) {
+  if (!Array.isArray(history)) return;
+
+  // Преобразуем серверные сообщения в наш формат
+  history.forEach(msg => {
+    if (!msg || !msg.text) return;
+    chatState.history.push({
+      type: 'user',
+      nick: msg.name || 'Дракон',
+      text: msg.text,
+      tab: msg.tab || 'local',
+      time: msg.time || Date.now(),
+      isMine: (msg.id === NET.myId)
+    });
+  });
+
+  // Ограничиваем
+  if (chatState.history.length > 100) {
+    chatState.history = chatState.history.slice(-100);
+  }
+
+  renderChatHistory();
+}
+
+// ============================================================
+//  Экранирование HTML
+// ============================================================
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// ============================================================
+//  Клавиша T — фокус на чат
+// ============================================================
+window.addEventListener('keydown', e => {
+  if (currentScreen !== 'worldScreen') return;
+
+  if (document.activeElement && document.activeElement.tagName === 'INPUT') {
+    if (e.key === 'Escape') document.activeElement.blur();
+    return;
+  }
+
+  if (e.key === 't' || e.key === 'T' || e.key === 'е' || e.key === 'Е') {
+    e.preventDefault();
+    $('chatInput').focus();
+  }
+});
+
+// ============================================================
+//  Пробел — рёв
+// ============================================================
+window.addEventListener('keydown', e => {
+  if (currentScreen !== 'worldScreen') return;
+  if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+
+  if (e.key === ' ') {
+    e.preventDefault();
+    setAnimation('roar');
+    Sound.roar();
+  }
+});
+
+// ============================================================
+//  Escape — назад из редактора / серверов
+// ============================================================
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    if (currentScreen === 'creatorScreen' || currentScreen === 'serverScreen') {
+      Sound.click();
+      show('mainMenu');
+      renderMenuPreview();
+    }
+  }
+});
+
+// ============================================================
+//  Запрет скролла страницы в мире
+// ============================================================
+document.addEventListener('wheel', e => {
+  if (currentScreen === 'worldScreen') e.preventDefault();
+}, { passive: false });
+
+// ============================================================
+//  Отключение от сервера при выходе из мира
+// ============================================================
+// (мы не имеем явной кнопки «выйти из мира», но если игрок
+//  обновил страницу — WebSocket закроется сам)
+
+// ============================================================
+//  Финал
+// ============================================================
+window.addEventListener('load', () => {
+  renderMenuPreview();
+});
+
+console.log('%c🐉 DragonTown — ONLINE ГОТОВО', 'color:#ff6b35;font-size:18px;font-weight:bold;text-shadow:1px 1px 2px #000');
+console.log('%cУправление: WASD — движение · Клик — идти · T — чат · ПРОБЕЛ — рёв · ESC — назад', 'color:#ffd966');
+console.log('%cМультиплеер: подключение к Cloudflare Worker через WebSocket', 'color:#8fd8ff');
+</script>
+
 </body>
 </html>
+<!-- ЧАСТЬ 9 ЗАКОНЧЕНА — ЭТО ФИНАЛ -->
