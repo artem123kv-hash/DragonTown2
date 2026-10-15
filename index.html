@@ -1706,189 +1706,530 @@ console.log('%c🌐 Часть 7 — WebSocket-клиент готов', 'color:
 
 <script>
 // ============================================================
-//  ЧАСТЬ 8: чат + финал
+//  ЧАСТЬ 8: игровой мир с другими игроками
+//  Карта 2800×2200, деревья, дома, дорожки + мультиплеер
 // ============================================================
 
-// ---------- Состояние чата ----------
-const chatState = {
-  currentTab: 'local',
-  history: []
+const worldCanvas = $('worldCanvas');
+const wctx = worldCanvas.getContext('2d');
+wctx.imageSmoothingEnabled = false;
+
+let WW = window.innerWidth;
+let WH = window.innerHeight;
+
+function resizeWorld() {
+  WW = window.innerWidth;
+  WH = window.innerHeight;
+  worldCanvas.width = WW;
+  worldCanvas.height = WH;
+  wctx.imageSmoothingEnabled = false;
+}
+window.addEventListener('resize', () => {
+  if (currentScreen === 'worldScreen') resizeWorld();
+});
+
+// ============================================================
+//  Мир (генерация — как раньше)
+// ============================================================
+const WORLD = {
+  width: 2800, height: 2200,
+  trees: [], houses: [],
+  grassPatches: [], grassTufts: [], flowers: [],
+  bushes: [], rocks: [], paths: []
 };
 
-// ============================================================
-//  Инициализация чата (вызывается при входе в мир)
-// ============================================================
-function initChat() {
-  // Приветствие только при первом заходе
-  if (chatState.history.length === 0) {
-    addChatMessage('sys', '', 'Добро пожаловать в DragonTown!');
-    addChatMessage('sys', '', 'Нажми T — чтобы открыть чат, Enter — отправить.');
+let _seed = 98765;
+function rnd() {
+  _seed = (_seed * 9301 + 49297) % 233280;
+  return _seed / 233280;
+}
+function rndRange(a, b) { return a + rnd() * (b - a); }
+function rndInt(a, b) { return Math.floor(rndRange(a, b + 1)); }
+
+function canPlace(x, y, r) {
+  for (const t of WORLD.trees) {
+    if (Math.hypot(x - t.x, y - t.y) < (t.r + r) * 0.8) return false;
+  }
+  for (const h of WORLD.houses) {
+    if (Math.abs(x - h.x) < h.w * 0.6 + r && Math.abs(y - h.y) < h.h * 0.6 + r) return false;
+  }
+  return true;
+}
+
+function generateWorld() {
+  _seed = 98765;
+  WORLD.trees = []; WORLD.houses = [];
+  WORLD.grassPatches = []; WORLD.grassTufts = [];
+  WORLD.flowers = []; WORLD.bushes = []; WORLD.rocks = []; WORLD.paths = [];
+
+  for (let y = 100; y < WORLD.height - 100; y += 30) {
+    const offsetX = Math.sin(y / 200) * 80;
+    WORLD.paths.push({ x: WORLD.width / 2 + offsetX, y: y, w: 100, h: 40 });
+  }
+  for (let x = 100; x < WORLD.width - 100; x += 30) {
+    const offsetY = Math.cos(x / 250) * 80;
+    WORLD.paths.push({ x: x, y: WORLD.height / 2 + offsetY, w: 40, h: 100 });
   }
 
-  // Табы Local / Party / Personal
-  document.querySelectorAll('#chatTabs .tab').forEach(t => {
-    t.addEventListener('click', () => {
-      Sound.click();
-      document.querySelectorAll('#chatTabs .tab').forEach(x => x.classList.remove('active'));
-      t.classList.add('active');
-      chatState.currentTab = t.dataset.chat;
-      renderChatHistory();
+  for (let i = 0; i < 200; i++) {
+    WORLD.grassPatches.push({
+      x: rndRange(0, WORLD.width), y: rndRange(0, WORLD.height),
+      r: rndRange(40, 120),
+      tone: rnd() < 0.5 ? 'dark' : 'light'
+    });
+  }
+  for (let i = 0; i < 800; i++) {
+    WORLD.grassTufts.push({
+      x: rndRange(0, WORLD.width), y: rndRange(0, WORLD.height),
+      h: rndRange(4, 9)
+    });
+  }
+  for (let i = 0; i < 250; i++) {
+    WORLD.flowers.push({
+      x: rndRange(0, WORLD.width), y: rndRange(0, WORLD.height),
+      color: ['#e74c3c', '#f1c40f', '#ff69b4', '#ffffff', '#9b59b6'][rndInt(0, 4)]
+    });
+  }
+  for (let i = 0; i < 60; i++) {
+    WORLD.bushes.push({
+      x: rndRange(100, WORLD.width - 100),
+      y: rndRange(100, WORLD.height - 100),
+      r: rndRange(14, 22)
+    });
+  }
+  for (let i = 0; i < 50; i++) {
+    WORLD.rocks.push({
+      x: rndRange(100, WORLD.width - 100),
+      y: rndRange(100, WORLD.height - 100),
+      r: rndRange(8, 16)
+    });
+  }
+
+  const houseSpots = [
+    { x: 500,  y: 500  },
+    { x: 2200, y: 450  },
+    { x: 600,  y: 1700 },
+    { x: 2200, y: 1750 },
+    { x: 1400, y: 300  },
+    { x: 1400, y: 1900 }
+  ];
+  houseSpots.forEach(p => {
+    WORLD.houses.push({ x: p.x, y: p.y, w: 200, h: 200 });
+  });
+
+  for (let i = 0; i < 180; i++) {
+    for (let tries = 0; tries < 20; tries++) {
+      const x = rndRange(80, WORLD.width - 80);
+      const y = rndRange(80, WORLD.height - 80);
+      const r = rndRange(50, 80);
+      if (Math.hypot(x - WORLD.width / 2, y - WORLD.height / 2) < 200) continue;
+      if (canPlace(x, y, r)) {
+        WORLD.trees.push({ x, y, r });
+        break;
+      }
+    }
+  }
+
+  WORLD.trees.sort((a, b) => a.y - b.y);
+  WORLD.bushes.sort((a, b) => a.y - b.y);
+  WORLD.rocks.sort((a, b) => a.y - b.y);
+}
+generateWorld();
+
+// ============================================================
+//  Игрок (локальный)
+// ============================================================
+const player = {
+  x: WORLD.width / 2,
+  y: WORLD.height / 2,
+  speed: 3.5,
+  targetX: WORLD.width / 2,
+  targetY: WORLD.height / 2,
+  facing: false,
+  frame: 0,
+  animTimer: 0,
+  moving: false,
+  stepTimer: 0,
+  animation: 'stand'
+};
+
+// Таймер для отправки своих координат (не каждый кадр — а раз в 100 мс)
+let netSendTimer = 0;
+const NET_SEND_INTERVAL = 100; // мс
+
+const camera = { x: player.x, y: player.y };
+
+// ============================================================
+//  Управление
+// ============================================================
+const keys = {};
+
+window.addEventListener('keydown', e => {
+  if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+  keys[e.key.toLowerCase()] = true;
+});
+window.addEventListener('keyup', e => {
+  keys[e.key.toLowerCase()] = false;
+});
+
+worldCanvas.addEventListener('click', e => {
+  const rect = worldCanvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  player.targetX = mx - WW / 2 + camera.x;
+  player.targetY = my - WH / 2 + camera.y + 30;
+  if (player.animation !== 'walk') setAnimation('walk');
+});
+
+// ============================================================
+//  Смена анимации (с отправкой в сеть)
+// ============================================================
+function setAnimation(anim) {
+  const changed = (player.animation !== anim);
+  player.animation = anim;
+  player.frame = 0;
+
+  document.querySelectorAll('#animBar .animBtn').forEach(b => {
+    b.classList.toggle('active', b.dataset.anim === anim);
+  });
+
+  if (anim === 'sit')   Sound.sit();
+  if (anim === 'dance') Sound.dance();
+  if (anim === 'wave')  Sound.wave();
+  if (anim === 'roar')  Sound.roar();
+
+  // Отправляем в сеть, если анимация поменялась
+  if (changed && typeof sendMyAnimation === 'function') {
+    sendMyAnimation();
+  }
+}
+
+document.querySelectorAll('#animBar .animBtn').forEach(b => {
+  b.addEventListener('click', () => setAnimation(b.dataset.anim));
+});
+
+// ============================================================
+//  Цикл мира
+// ============================================================
+let worldRunning = false;
+let worldLastT = 0;
+
+function startWorld() {
+  resizeWorld();
+
+  player.x = WORLD.width / 2;
+  player.y = WORLD.height / 2;
+  player.targetX = player.x;
+  player.targetY = player.y;
+  camera.x = player.x;
+  camera.y = player.y;
+
+  setAnimation('stand');
+
+  worldRunning = true;
+  worldLastT = performance.now();
+  requestAnimationFrame(worldLoop);
+}
+
+function worldLoop(t) {
+  if (!worldRunning || currentScreen !== 'worldScreen') return;
+  const dt = t - worldLastT;
+  worldLastT = t;
+  updateWorld(dt, t);
+  drawWorld();
+  requestAnimationFrame(worldLoop);
+}
+
+// ============================================================
+//  Обновление
+// ============================================================
+function updateWorld(dt, t) {
+  const canMove = (player.animation !== 'sit');
+
+  let dx = 0, dy = 0;
+  if (canMove) {
+    if (keys['w'] || keys['arrowup'])    dy -= 1;
+    if (keys['s'] || keys['arrowdown'])  dy += 1;
+    if (keys['a'] || keys['arrowleft'])  dx -= 1;
+    if (keys['d'] || keys['arrowright']) dx += 1;
+  }
+
+  player.moving = false;
+
+  if (dx !== 0 || dy !== 0) {
+    const len = Math.hypot(dx, dy);
+    player.x += (dx / len) * player.speed;
+    player.y += (dy / len) * player.speed;
+    player.targetX = player.x;
+    player.targetY = player.y;
+    player.moving = true;
+    if (dx < 0) player.facing = true;
+    else if (dx > 0) player.facing = false;
+    if (player.animation === 'stand' || player.animation === 'sit') setAnimation('walk');
+  } else if (canMove) {
+    const tdx = player.targetX - player.x;
+    const tdy = player.targetY - player.y;
+    const dist = Math.hypot(tdx, tdy);
+    if (dist > 2) {
+      player.x += (tdx / dist) * player.speed;
+      player.y += (tdy / dist) * player.speed;
+      player.moving = true;
+      if (tdx < 0) player.facing = true;
+      else if (tdx > 0) player.facing = false;
+      if (player.animation === 'stand' || player.animation === 'sit') setAnimation('walk');
+    }
+  }
+
+  player.x = Math.max(60, Math.min(WORLD.width - 60, player.x));
+  player.y = Math.max(60, Math.min(WORLD.height - 60, player.y));
+
+  // Анимация
+  if (player.moving) {
+    if (t - player.animTimer > 130) {
+      player.animTimer = t;
+      player.frame = (player.frame + 1) % 6;
+    }
+    if (t - player.stepTimer > 260) {
+      player.stepTimer = t;
+      Sound.step();
+    }
+  } else {
+    if (player.animation === 'walk') {
+      setAnimation('stand');
+    }
+    if (player.animation === 'dance' || player.animation === 'wave' || player.animation === 'roar') {
+      if (t - player.animTimer > 150) {
+        player.animTimer = t;
+        player.frame = (player.frame + 1) % 6;
+      }
+    } else {
+      player.frame = 0;
+    }
+  }
+
+  // ============================================================
+  //  Отправляем свои координаты в сеть раз в NET_SEND_INTERVAL
+  // ============================================================
+  netSendTimer += dt;
+  if (netSendTimer > NET_SEND_INTERVAL) {
+    netSendTimer = 0;
+    if (typeof sendMyPosition === 'function' && NET.connected) {
+      sendMyPosition();
+    }
+  }
+
+  // Камера
+  camera.x += (player.x - camera.x) * 0.12;
+  camera.y += (player.y - camera.y) * 0.12;
+
+  const posEl = $('worldPos');
+  if (posEl) posEl.textContent = Math.round(player.x) + ', ' + Math.round(player.y);
+}
+
+// ============================================================
+//  Отрисовка
+// ============================================================
+function drawWorld() {
+  wctx.fillStyle = '#c8b878';
+  wctx.fillRect(0, 0, WW, WH);
+
+  const offX = WW / 2 - camera.x;
+  const offY = WH / 2 - camera.y;
+
+  // Пятна травы
+  for (const p of WORLD.grassPatches) {
+    const sx = p.x + offX, sy = p.y + offY;
+    if (sx < -150 || sx > WW + 150 || sy < -150 || sy > WH + 150) continue;
+    wctx.fillStyle = p.tone === 'dark'
+      ? 'rgba(120,160,90,0.35)'
+      : 'rgba(220,240,160,0.35)';
+    wctx.beginPath();
+    wctx.ellipse(sx, sy, p.r, p.r * 0.6, 0, 0, Math.PI * 2);
+    wctx.fill();
+  }
+
+  // Дорожки
+  for (const p of WORLD.paths) {
+    const sx = p.x + offX, sy = p.y + offY;
+    if (sx < -200 || sx > WW + 200 || sy < -200 || sy > WH + 200) continue;
+    wctx.fillStyle = '#d4b878';
+    wctx.fillRect(sx - p.w / 2, sy - p.h / 2, p.w, p.h);
+  }
+
+  // Камни
+  for (const r of WORLD.rocks) {
+    const sx = r.x + offX, sy = r.y + offY;
+    if (sx < -100 || sx > WW + 100 || sy < -100 || sy > WH + 100) continue;
+    wctx.fillStyle = 'rgba(0,0,0,0.2)';
+    wctx.beginPath();
+    wctx.ellipse(sx, sy + r.r * 0.4, r.r * 0.9, r.r * 0.3, 0, 0, Math.PI * 2);
+    wctx.fill();
+    wctx.fillStyle = '#7a7a7a';
+    wctx.beginPath(); wctx.arc(sx, sy, r.r, 0, Math.PI * 2); wctx.fill();
+    wctx.fillStyle = '#9a9a9a';
+    wctx.beginPath(); wctx.arc(sx - r.r * 0.25, sy - r.r * 0.25, r.r * 0.55, 0, Math.PI * 2); wctx.fill();
+  }
+
+  // Пучки травы
+  wctx.strokeStyle = '#7a9a3a';
+  wctx.lineWidth = 1;
+  for (const t of WORLD.grassTufts) {
+    const sx = t.x + offX, sy = t.y + offY;
+    if (sx < -20 || sx > WW + 20 || sy < -20 || sy > WH + 20) continue;
+    wctx.beginPath();
+    wctx.moveTo(sx, sy);
+    wctx.lineTo(sx - 2, sy - t.h);
+    wctx.stroke();
+    wctx.beginPath();
+    wctx.moveTo(sx, sy);
+    wctx.lineTo(sx + 2, sy - t.h);
+    wctx.stroke();
+  }
+
+  // Цветы
+  for (const f of WORLD.flowers) {
+    const sx = f.x + offX, sy = f.y + offY;
+    if (sx < -20 || sx > WW + 20 || sy < -20 || sy > WH + 20) continue;
+    wctx.fillStyle = f.color;
+    wctx.fillRect(sx - 2, sy - 2, 4, 4);
+    wctx.fillStyle = '#ffd966';
+    wctx.fillRect(sx - 1, sy - 1, 2, 2);
+  }
+
+  // Y-сортировка
+  const renderables = [];
+
+  WORLD.houses.forEach(h => {
+    renderables.push({
+      y: h.y + h.h * 0.3,
+      draw: () => {
+        const sx = h.x + offX;
+        const sy = h.y + offY;
+        if (sx < -300 || sx > WW + 300 || sy < -300 || sy > WH + 300) return;
+        drawHouse(wctx, sx, sy, h.w, h.h);
+      }
     });
   });
 
-  // Отправка
-  $('chatSend').addEventListener('click', sendChatMessage);
-  $('chatInput').addEventListener('keydown', e => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      sendChatMessage();
-    }
-  });
-}
-
-// ============================================================
-//  Отправка сообщения
-// ============================================================
-function sendChatMessage() {
-  const input = $('chatInput');
-  const text = input.value.trim();
-  if (!text) return;
-
-  addChatMessage('user', CONFIG.name, text, chatState.currentTab);
-  input.value = '';
-  input.blur();
-}
-
-// ============================================================
-//  Добавление сообщения в историю
-// ============================================================
-function addChatMessage(type, nick, text, tab = 'local') {
-  chatState.history.push({
-    type, nick, text, tab,
-    time: Date.now()
+  WORLD.bushes.forEach(b => {
+    renderables.push({
+      y: b.y + b.r * 0.3,
+      draw: () => {
+        const sx = b.x + offX, sy = b.y + offY;
+        if (sx < -100 || sx > WW + 100 || sy < -100 || sy > WH + 100) return;
+        wctx.fillStyle = 'rgba(0,0,0,0.15)';
+        wctx.beginPath();
+        wctx.ellipse(sx, sy + b.r * 0.5, b.r * 0.9, b.r * 0.3, 0, 0, Math.PI * 2);
+        wctx.fill();
+        wctx.fillStyle = '#3a6b2a';
+        wctx.beginPath(); wctx.arc(sx, sy, b.r, 0, Math.PI * 2); wctx.fill();
+        wctx.fillStyle = '#5a8b3a';
+        wctx.beginPath();
+        wctx.arc(sx - b.r * 0.3, sy - b.r * 0.3, b.r * 0.6, 0, Math.PI * 2);
+        wctx.fill();
+      }
+    });
   });
 
-  // Ограничение истории
-  if (chatState.history.length > 50) {
-    chatState.history.shift();
-  }
-
-  renderChatHistory();
-
-  // Звук при получении чужого сообщения
-  if (type === 'user' && nick !== CONFIG.name) {
-    Sound.chatMsg();
-  }
-}
-
-// ============================================================
-//  Отрисовка истории
-// ============================================================
-function renderChatHistory() {
-  const box = $('chatHistory');
-  box.innerHTML = '';
-
-  const visible = chatState.history.filter(m => {
-    if (m.type === 'sys') return true;
-    if (chatState.currentTab === 'local') return m.tab === 'local' || !m.tab;
-    return m.tab === chatState.currentTab;
+  WORLD.trees.forEach(t => {
+    renderables.push({
+      y: t.y + t.r * 0.3,
+      draw: () => {
+        const sx = t.x + offX, sy = t.y + offY;
+        if (sx < -200 || sx > WW + 200 || sy < -250 || sy > WH + 250) return;
+        drawTree(wctx, sx, sy, t.r);
+      }
+    });
   });
 
-  visible.slice(-12).forEach(m => {
-    const div = document.createElement('div');
-    div.className = 'msg' + (m.type === 'sys' ? ' sys' : '');
+  // ============================================================
+  //  ДРУГИЕ ИГРОКИ (из сети)
+  // ============================================================
+  if (typeof NET !== 'undefined' && NET.players) {
+    NET.players.forEach(other => {
+      renderables.push({
+        y: other.y,
+        draw: () => drawRemotePlayer(other, offX, offY)
+      });
+    });
+  }
 
-    if (m.type === 'sys') {
-      div.textContent = m.text;
-    } else {
-      const tabPrefix = { local: '', party: '[P] ', personal: '[→] ' }[m.tab] || '';
-      div.innerHTML =
-        `<span class="nick">${tabPrefix}${escapeHtml(m.nick)}:</span> ${escapeHtml(m.text)}`;
-    }
-
-    box.appendChild(div);
+  // Локальный игрок
+  renderables.push({
+    y: player.y,
+    draw: () => drawPlayer(offX, offY)
   });
 
-  box.scrollTop = box.scrollHeight;
-}
-
-// Экранирование HTML
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+  renderables.sort((a, b) => a.y - b.y);
+  renderables.forEach(r => r.draw());
 }
 
 // ============================================================
-//  Клавиша T — фокус на чат
+//  Отрисовка локального игрока
 // ============================================================
-window.addEventListener('keydown', e => {
-  if (currentScreen !== 'worldScreen') return;
+function drawPlayer(offX, offY) {
+  const size = 96;
+  const px = player.x + offX;
+  const py = player.y + offY;
 
-  if (document.activeElement && document.activeElement.tagName === 'INPUT') {
-    if (e.key === 'Escape') document.activeElement.blur();
-    return;
+  drawDragonShadow(wctx, px, py + 6, size);
+
+  if (dragonReady) {
+    drawDragonSprite(
+      wctx, px, py - 15, size,
+      CONFIG.colorIndex, player.frame, player.facing
+    );
   }
 
-  if (e.key === 't' || e.key === 'T' || e.key === 'е' || e.key === 'Е') {
-    e.preventDefault();
-    $('chatInput').focus();
+  wctx.save();
+  wctx.font = 'bold 13px Trebuchet MS';
+  wctx.textAlign = 'center';
+  wctx.fillStyle = '#000';
+  wctx.fillText(CONFIG.name, px + 1, py - 55 + 1);
+  wctx.fillStyle = '#ffd966';
+  wctx.fillText(CONFIG.name, px, py - 55);
+  wctx.restore();
+}
+
+// ============================================================
+//  Отрисовка удалённого игрока (из сети)
+// ============================================================
+function drawRemotePlayer(other, offX, offY) {
+  const size = 96;
+  const px = other.x + offX;
+  const py = other.y + offY;
+
+  // Не рисуем, если за экраном
+  if (px < -100 || px > WW + 100 || py < -100 || py > WH + 100) return;
+
+  drawDragonShadow(wctx, px, py + 6, size);
+
+  if (dragonReady) {
+    const colorIdx = (typeof other.colorIndex === 'number') ? other.colorIndex : 0;
+    const frame = (typeof other.frame === 'number') ? other.frame : 0;
+    const facing = !!other.facing;
+
+    drawDragonSprite(
+      wctx, px, py - 15, size,
+      colorIdx, frame, facing
+    );
   }
-});
 
-// ============================================================
-//  Пробел в мире — рёв
-// ============================================================
-window.addEventListener('keydown', e => {
-  if (currentScreen !== 'worldScreen') return;
-  if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+  // Имя над головой — другим цветом (голубоватый), чтобы отличать от себя
+  const name = other.name || 'Дракон';
+  wctx.save();
+  wctx.font = 'bold 13px Trebuchet MS';
+  wctx.textAlign = 'center';
+  wctx.fillStyle = '#000';
+  wctx.fillText(name, px + 1, py - 55 + 1);
+  wctx.fillStyle = '#8fd8ff';
+  wctx.fillText(name, px, py - 55);
+  wctx.restore();
+}
 
-  if (e.key === ' ') {
-    e.preventDefault();
-    setAnimation('roar');
-    Sound.roar();
-  }
-});
-
-// ============================================================
-//  Escape — назад из редактора / серверов
-// ============================================================
-window.addEventListener('keydown', e => {
-  if (e.key === 'Escape') {
-    if (currentScreen === 'creatorScreen' || currentScreen === 'serverScreen') {
-      Sound.click();
-      show('mainMenu');
-      renderMenuPreview();
-    }
-  }
-});
-
-// ============================================================
-//  Запрет скролла страницы в мире
-// ============================================================
-document.addEventListener('wheel', e => {
-  if (currentScreen === 'worldScreen') e.preventDefault();
-}, { passive: false });
-
-// ============================================================
-//  Финал — стартовая инициализация
-// ============================================================
-window.addEventListener('load', () => {
-  // Превью уже отрисовано в части 5
-  renderMenuPreview();
-});
-
-// ---------- Логи ----------
-console.log('%c🐉 DragonTown — Beta 8 ГОТОВО', 'color:#ff6b35;font-size:18px;font-weight:bold;text-shadow:1px 1px 2px #000');
-console.log('%cУправление: WASD — движение · Клик — идти · T — чат · ПРОБЕЛ — рёв · ESC — назад', 'color:#ffd966');
-console.log('%cКнопки анимаций снизу: 🧍 🚶 🪑 💃 👋 🦁', 'color:#888');
-console.log('%cРедактор: настрой цвета, стили, имя — всё сразу видно в мире', 'color:#888');
-
+console.log('%c🌍 Часть 8 — мир с другими игроками готов', 'color:#4caf50;font-weight:bold');
 </script>
+<!-- ЧАСТЬ 8 ЗАКОНЧЕНА -->
 
 </body>
 </html>
-<!-- ЧАСТЬ 8 ЗАКОНЧЕНА — ЭТО ФИНАЛ -->
